@@ -190,15 +190,6 @@ def hu_get_translation_definition(line, udpos, title, entry_lang, translations, 
                 wordpairs[udpos].add(tuple([title, tr]))
     elif entry_lang == 'hun':
         definitions = create_dict(line, udpos, title, definitions)
-        """
-        if line and udpos:
-            # erase emojis and unknown characters
-            line = ''.join([c if len(c.encode('utf-8')) < 4 else '' for c in line])
-            if line:
-                if title not in definitions[udpos]:
-                    definitions[udpos][title] = set()
-                definitions[udpos][title].add(line)
-        """
     return translations, wordpairs, definitions
 
 
