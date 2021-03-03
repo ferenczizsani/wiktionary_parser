@@ -49,8 +49,6 @@ def read_dump(path):
     ns = tag_namespace(root)
     nsmap = {'wiki' : ns}
     pages = root.findall('wiki:page', nsmap)
-    title = ''
-    text = ''
     for page in pages:
         title = page.find('wiki:title', nsmap)
         revision = page.find('wiki:revision', nsmap)
@@ -97,45 +95,34 @@ def wikpos2ud(line, lang):
     return posud[lang].get(line, 'X') 
 
 
-def save_pairs(wordpairs, lang, output_file=None, to_file=False):
-    if to_file:
-        f = open(os.path.join(output_file, 'wordpairs_{}.tsv'.format(lang)), 'w')
-    for pos, data in wordpairs.items():
-        for tp in data:
-            if len(tp) == 2:
-                if lang == 'fi':
-                    hu = tp[0]
-                    fi = tp[1]
-                else:
-                    fi = tp[0]
-                    hu = tp[1]
-                if not to_file:
-                    print('\t'.join([fi, hu, pos]))
-                else:
+def save_pairs(wordpairs, lang, output_file=None):
+    with open(os.path.join(output_file, 'wordpairs_{}.tsv'.format(lang)), 'w') as f:
+        for pos, data in wordpairs.items():
+            for tp in data:
+                if len(tp) == 2:
+                    if lang == 'fi':
+                        hu = tp[0]
+                        fi = tp[1]
+                    else:
+                        fi = tp[0]
+                        hu = tp[1]
                     f.write('\t'.join([fi, hu, pos]) + '\n')
-    f.close()
 
 
-def save_data(lang, defs, examples, words, output_path, to_file):
-    save_pairs(words, lang, output_path, to_file)
-    save_sentences(defs, lang, 'definitions', output_path, to_file)
-    save_sentences(examples, lang, 'examples', output_path, to_file)
+def save_data(lang, defs, examples, words, output_path):
+    save_pairs(words, lang, output_path)
+    save_sentences(defs, lang, 'definitions', output_path)
+    save_sentences(examples, lang, 'examples', output_path)
 
 
-def save_sentences(dataset, lang, definition_or_example, output_path, to_file=False):
+def save_sentences(dataset, lang, definition_or_example, output_path):
     filename = '{}_{}.tsv'.format(definition_or_example, lang)
     filepath = os.path.join(output_path, filename)
-    if to_file:
-        f = open(filepath, 'w')
-    for pos, data in dataset.items():
-        for word, sents in data.items():
-            for sentence in sents:
-                if to_file:
-                    #f.write(pos + '\t' + word + '\t' + sentence + '\n')
+    with open(filepath, 'w') as f:
+        for pos, data in dataset.items():
+            for word, sents in data.items():
+                for sentence in sents:
                     f.write('\t'.join([pos, word, sentence]) + '\n')
-                else:
-                    print('\t'.join([pos, word, sentence]))
-    f.close()
 
 
 def clean_line(line, mode):
@@ -181,6 +168,17 @@ def fi_get_translation(line, title, lang_header, udpos, translations, definition
     return translations, definitions, wordpairs
    
 
+def create_dict(line, udpos, title, output_dict):
+    line = clean_line(line, 'ex')
+    if line and udpos:
+        # erase emojis and unknown characters
+        line = ''.join([c if len(c.encode('utf-8')) < 4 else '' for c in line])
+        if line:
+            if title not in output_dict[udpos]:
+                output_dict[udpos][title] = set()
+            output_dict[udpos][title].add(line)
+    return output_dict
+
 def hu_get_translation_definition(line, udpos, title, entry_lang, translations, wordpairs, definitions):
     line = clean_line(line, 'tr')
     if entry_lang == 'fin':
@@ -191,6 +189,8 @@ def hu_get_translation_definition(line, udpos, title, entry_lang, translations, 
             for tr in translations:
                 wordpairs[udpos].add(tuple([title, tr]))
     elif entry_lang == 'hun':
+        definitions = create_dict(line, udpos, title, definitions)
+        """
         if line and udpos:
             # erase emojis and unknown characters
             line = ''.join([c if len(c.encode('utf-8')) < 4 else '' for c in line])
@@ -198,6 +198,7 @@ def hu_get_translation_definition(line, udpos, title, entry_lang, translations, 
                 if title not in definitions[udpos]:
                     definitions[udpos][title] = set()
                 definitions[udpos][title].add(line)
+        """
     return translations, wordpairs, definitions
 
 
@@ -243,6 +244,69 @@ def fi_get_relevant_section(text):
     return sections
 
 
+def extract_hu_dict(text, title, langcodes, wordpairs, definitions, example_sents):
+    if any([x in title for x in ['Függelék', 'Wikiszótár']]):
+        return
+    sections = hu_get_relevant_section(text, langcodes)
+    entry_lang = None
+    udpos = None
+    for section in sections:
+        translations = []
+        for line in section.split('\n'):
+            # synonyms
+            if line.startswith('{{finsyn') or line.startswith('{{hunsyn'):
+                break
+            if line.startswith('[[Kategória:'):
+                continue
+            # part-of-speech
+            match_obj = re.match('\{\{((fin)|(hun))(\w+)((\|)?.*)?\}\}', line)
+            if match_obj:
+                entry_lang, udpos = hu_get_lang_pos(match_obj)
+            elif re.match(r'\{\{Fn\}\}', line):
+                udpos = wikpos2ud('fn', 'hu')
+            elif re.match(r'\{\{fi-(?!decl)', line):
+                pos = re.split('\||-|\}', line.split('{{fi-')[1])[0]
+                udpos = wikpos2ud(pos, 'hu')
+            elif re.match(r'\{\{.*', line):
+                continue
+            # example sentences
+            elif line.startswith('#:'):
+                if entry_lang == 'hun':
+                    example_sents = create_dict(line, udpos, title, example_sents)
+            # translation or definition
+            elif line.startswith('#'):
+                translations, wordpairs, definitions = hu_get_translation_definition(line, udpos, title, entry_lang, translations, wordpairs, definitions)
+    return wordpairs, definitions, example_sents
+
+
+def extract_fi_dict(text, title, wordpairs, definitions, example_sents):
+    relevant_sections = fi_get_relevant_section(text)
+    udpos = None
+    for relevant_section in relevant_sections:
+        translations = []
+        section_lines = relevant_section.split('\n')
+        lang_header = section_lines[0]
+        for line in section_lines[1:]:
+            # part-of-speech
+            pos = re.match(r'===(\w+)===', line)
+            if pos:
+                udpos = wikpos2ud(pos.group(1).lower(), 'fi')
+            # example sentence
+            elif line.startswith('#:'):
+                line = clean_line(line, 'ex')
+                if lang_header == '==Suomi==' and line:
+                    if udpos:
+                        if title not in example_sents[udpos]:
+                                example_sents[udpos][title] = set()
+                        example_sents[udpos][title].add(line)
+            # translation or definition
+            elif line.startswith('# ') or (line.startswith('#') and not any([line.startswith(x) for x in ['#*', '##']])):
+                result = fi_get_translation(line, title, lang_header, udpos, translations, definitions, wordpairs)
+                if result and len(result) == 3:
+                    translations, definitions, wordpairs = result
+    return wordpairs, definitions, example_sents
+
+
 def extract_dict(path, lang):
     wordpairs = defaultdict(set)
     definitions = defaultdict(dict)
@@ -251,65 +315,11 @@ def extract_dict(path, lang):
         langcodes = [code.strip()[:-2] for code in f.readlines() if code.strip()]
     for title, text in read_dump(path):
         if lang == 'fi':
-            relevant_sections = fi_get_relevant_section(text)
-            for relevant_section in relevant_sections:
-                translations = []
-                section_lines = relevant_section.split('\n')
-                lang_header = section_lines[0]
-                for line in section_lines[1:]:
-                    # part-of-speech
-                    pos = re.match(r'===(\w+)===', line)
-                    if pos:
-                        udpos = wikpos2ud(pos.group(1).lower(), lang)
-                    # example sentence
-                    elif line.startswith('#:'):
-                        line = clean_line(line, 'ex')
-                        if lang_header == '==Suomi==' and line:
-                            if udpos:
-                                if title not in example_sents[udpos]:
-                                     example_sents[udpos][title] = set()
-                                example_sents[udpos][title].add(line)
-                    # translation or definition
-                    elif line.startswith('# ') or (line.startswith('#') and not any([line.startswith(x) for x in ['#*', '##']])):
-                        result = fi_get_translation(line, title, lang_header, udpos, translations, definitions, wordpairs)
-                        if result and len(result) == 3:
-                            translations, definitions, wordpairs = result
+            wordpairs, definitions, example_sents = extract_fi_dict(text, title, wordpairs, definitions, example_sents)
         elif lang == 'hu':
-            if any([x in title for x in ['Függelék', 'Wikiszótár']]):
-                continue
-            sections = hu_get_relevant_section(text, langcodes)
-            for section in sections:
-                translations = []
-                for line in section.split('\n'):
-                    # synonyms
-                    if line.startswith('{{finsyn') or line.startswith('{{hunsyn'):
-                        break
-                    if line.startswith('[[Kategória:'):
-                        continue
-                    # part-of-speech
-                    match_obj = re.match('\{\{((fin)|(hun))(\w+)((\|)?.*)?\}\}', line)
-                    if match_obj:
-                        entry_lang, udpos = hu_get_lang_pos(match_obj)
-                    elif re.match(r'\{\{Fn\}\}', line):
-                        udpos = wikpos2ud('fn', 'hu')
-                    elif re.match(r'\{\{fi-(?!decl)', line):
-                        pos = re.split('\||-|\}', line.split('{{fi-')[1])[0]
-                        udpos = wikpos2ud(pos, 'hu')
-                    elif re.match(r'\{\{.*', line):
-                        continue
-                    # example sentences
-                    elif line.startswith('#:'):
-                        if entry_lang == 'hun':
-                            line = clean_line(line, 'ex')
-                            if line and udpos:
-                                line = ''.join([c if len(c.encode('utf-8')) < 4 else '?' for c in line])
-                                if line:
-                                    if title not in example_sents[udpos]:
-                                        example_sents[udpos][title] = set()
-                                    example_sents[udpos][title].add(line)
-                    # translation or definition
-                    elif line.startswith('#'):# or line.startswith('[[') or (line.startswith('*') and not line.startswith('*{{')):
-                        translations, wordpairs, definitions = hu_get_translation_definition(line, udpos, title, entry_lang, translations, wordpairs, definitions)
+            result = extract_hu_dict(text, title, langcodes, wordpairs, definitions, example_sents)
+            if result:
+                wordpairs, definitions, example_sents = result
     return definitions, example_sents, wordpairs
 
 
@@ -328,13 +338,13 @@ def main():
     print('Extracting information from Wiktionary...')
     definitions, examples, wordpairs = extract_dict(path, lang)
     if arguments['all']:
-        save_data(lang, definitions, examples, wordpairs, output_path, to_file=True)
+        save_data(lang, definitions, examples, wordpairs, output_path)
     elif arguments['wordpairs']:
-        save_pairs(wordpairs, lang, output_path, to_file=True)
+        save_pairs(wordpairs, lang, output_path)
     elif arguments['definitions']:
-        save_sentences(definitions, lang, 'definitions', output_path, to_file=True)
+        save_sentences(definitions, lang, 'definitions', output_path)
     elif arguments['examples']:
-        save_sentences(examples, lang, 'examples', output_path, to_file=True)
+        save_sentences(examples, lang, 'examples', output_path)
     print('Done.')
 
 if __name__ == '__main__':
