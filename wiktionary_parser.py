@@ -152,11 +152,16 @@ def fi_get_translation(line, title, lang_header, udpos, translations, definition
                 definitions[udpos][title] = set()
             definitions[udpos][title].add(line)
     elif lang_header == '==Unkari==':
-        line = re.split(r',\s*(?![^()]*\))', line)
+
+        line = re.split('(?:,|;)\s*(?![^()]*\))', line)
+        #line = re.split(r',\s*(?![^()]*\))', line)
         trs = [x.strip() for x in line if x.strip()]
         translations.extend(trs)
         if title and translations:
             for trans in translations:
+                if udpos:
+                    wordpairs[udpos].add(tuple([title, trans]))
+                    """
                 if ';' in trans:
                     for wordtr in trans.split(';'):
                         wordtr = wordtr.strip()
@@ -165,6 +170,7 @@ def fi_get_translation(line, title, lang_header, udpos, translations, definition
                 else:
                     if udpos:
                         wordpairs[udpos].add(tuple([title, trans]))
+                    """
     return translations, definitions, wordpairs
    
 
