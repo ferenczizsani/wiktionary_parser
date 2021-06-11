@@ -255,7 +255,7 @@ def extract_hu_dict(text, title, langcodes, wordpairs, definitions, example_sent
             elif re.match(r'\{\{.*', line):
                 continue
             # example sentences
-            elif line.startswith('#:'):
+            elif line.startswith('#*:') or line.startswith('#:'):
                 if entry_lang == 'hun':
                     example_sents = create_dict(line, udpos, title, example_sents)
             # translation or definition
